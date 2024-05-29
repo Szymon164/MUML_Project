@@ -1,44 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-class Encoder(nn.Module):
-    def __init__(self, input_size=784):
-        super(Encoder, self).__init__()
-        self.fc1 = nn.Linear(input_size, 500)
-        self.fc2 = nn.Linear(500, 500)
-        self.fc3 = nn.Linear(500, 2000)
-        self.fc_mean = nn.Linear(2000, 10)
-        self.fc_log_var = nn.Linear(2000, 10)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        return self.fc_mean(x), self.fc_log_var(x)
-    
-class Decoder(nn.Module):
-    def __init__(self, output_size=784):
-        super(Decoder, self).__init__()
-        self.fc1 = nn.Linear(10, 2000)
-        self.fc2 = nn.Linear(2000, 500)
-        self.fc3 = nn.Linear(500, 500)
-        self.fc4 = nn.Linear(500, output_size)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        return F.sigmoid(self.fc4(x))
+from Encoder import Encoder
+from Decoder import Decoder
+from torch.optim import Adam
+from torch.optim.lr_scheduler import StepLR
 
 class VAE(nn.Module):
-    def __init__(self, size=784, encoder=None, decoder=None):
+    def __init__(self, encoder=None, decoder=None):
         super(VAE, self).__init__()
         
         if not encoder:
-            self.encoder = Encoder(size)
+            self.encoder = Encoder()
         if not decoder:
-            self.decoder = Decoder(size)
+            self.decoder = Decoder()
     
     def sampling(self, mu, log_var):
         std = torch.exp(0.5*log_var)
@@ -49,3 +24,27 @@ class VAE(nn.Module):
         mu, log_var = self.encoder(x.view(-1, 784))
         z = self.sampling(mu, log_var)
         return self.decoder(z), mu, log_var
+
+    def loss_function(self, recon_x, x, mu, log_var):
+        BCE = F.binary_cross_entropy(recon_x, x.view(-1, 784), reduction='sum')
+        KLD = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+        return BCE + KLD
+    
+    def train(self, dataloader, epochs=100, lr=2e-3, gamma=0.95):
+        optimizer = Adam(self.parameters(), lr=lr)
+        lr_s = StepLR(optimizer, step_size=10, gamma=gamma)
+        for epoch in range(epochs):
+            train_loss = 0
+            
+            for batch_idx, (data, _) in enumerate(dataloader):
+                data = data.cuda()
+                optimizer.zero_grad()
+                
+                recon_batch, mu, log_var = self(data)
+                loss = self.loss_function(recon_batch, data, mu, log_var)
+                
+                loss.backward()
+                train_loss += loss.item()
+                optimizer.step()
+            lr_s.step()
+            print("Epoch: {}, Loss={:.4f}, LR={:.4f}".format(epoch, train_loss / len(dataloader.dataset), lr_s.get_last_lr()[0]))
